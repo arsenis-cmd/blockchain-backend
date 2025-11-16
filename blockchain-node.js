@@ -9,12 +9,16 @@
 const express = require('express');
 const WebSocket = require('ws');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 // Configuration
 const PORT = process.env.PORT || 8333;
 const WS_PORT = process.env.WS_PORT || PORT; // Use same port for WebSocket
 const NODE_ENV = process.env.NODE_ENV || 'production';
 const NODE_REGION = process.env.NODE_REGION || 'us-east-1';
+const BLOCKCHAIN_DATA_DIR = process.env.BLOCKCHAIN_DATA_DIR || './blockchain_data';
+const SAVE_INTERVAL = 60000; // Save every 60 seconds
 
 // Node state
 const peers = new Map(); // Connected peers
@@ -24,12 +28,23 @@ const blockchain = {
     height: 0,
     tips: new Set(),
     // NEW: Transaction indexing by address
-    txByAddress: new Map()    // address -> [tx.id]
+    txByAddress: new Map(),   // address -> [tx.id]
+    genesisHash: null
 };
 
 // Express app for HTTP endpoints
 const app = express();
 app.use(express.json());
+
+// MARK: - Initialization
+
+// Load blockchain from disk or create genesis
+console.log('🔄 Initializing blockchain...');
+const loaded = loadBlockchain();
+if (!loaded) {
+    createGenesisBlock();
+}
+console.log('');
 
 // MARK: - WebSocket Server (Combined HTTP + WS)
 
@@ -41,6 +56,12 @@ const server = app.listen(PORT, () => {
     console.log(`WebSocket:   ws://localhost:${PORT}`);
     console.log(`Environment: ${NODE_ENV}`);
     console.log(`Region:      ${NODE_REGION}`);
+    console.log(`Data:        ${BLOCKCHAIN_DATA_DIR}`);
+    console.log('=================================');
+    console.log(`📊 Current State:`);
+    console.log(`   Blocks: ${blockchain.blocks.size}`);
+    console.log(`   Height: ${blockchain.height}`);
+    console.log(`   Transactions: ${blockchain.transactions.size}`);
     console.log('=================================\n');
 });
 
@@ -357,6 +378,143 @@ function generateMessageId() {
     return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+// MARK: - Blockchain Persistence
+
+function ensureDataDirectory() {
+    if (!fs.existsSync(BLOCKCHAIN_DATA_DIR)) {
+        fs.mkdirSync(BLOCKCHAIN_DATA_DIR, { recursive: true });
+        console.log(`📁 Created blockchain data directory: ${BLOCKCHAIN_DATA_DIR}`);
+    }
+}
+
+function saveBlockchain() {
+    try {
+        ensureDataDirectory();
+
+        const data = {
+            blocks: Array.from(blockchain.blocks.entries()),
+            transactions: Array.from(blockchain.transactions.entries()),
+            txByAddress: Array.from(blockchain.txByAddress.entries()),
+            height: blockchain.height,
+            tips: Array.from(blockchain.tips),
+            genesisHash: blockchain.genesisHash,
+            savedAt: Date.now()
+        };
+
+        const filePath = path.join(BLOCKCHAIN_DATA_DIR, 'blockchain.json');
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+
+        console.log(`💾 Blockchain saved: ${blockchain.blocks.size} blocks, ${blockchain.transactions.size} txs`);
+    } catch (error) {
+        console.error('❌ Failed to save blockchain:', error);
+    }
+}
+
+function loadBlockchain() {
+    try {
+        const filePath = path.join(BLOCKCHAIN_DATA_DIR, 'blockchain.json');
+
+        if (!fs.existsSync(filePath)) {
+            console.log('📭 No saved blockchain found, will create genesis block');
+            return false;
+        }
+
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+        blockchain.blocks = new Map(data.blocks);
+        blockchain.transactions = new Map(data.transactions);
+        blockchain.txByAddress = new Map(data.txByAddress);
+        blockchain.height = data.height;
+        blockchain.tips = new Set(data.tips);
+        blockchain.genesisHash = data.genesisHash;
+
+        console.log('📂 Blockchain loaded from disk:');
+        console.log(`   - Blocks: ${blockchain.blocks.size}`);
+        console.log(`   - Transactions: ${blockchain.transactions.size}`);
+        console.log(`   - Height: ${blockchain.height}`);
+        console.log(`   - Saved: ${new Date(data.savedAt).toISOString()}`);
+
+        return true;
+    } catch (error) {
+        console.error('❌ Failed to load blockchain:', error);
+        return false;
+    }
+}
+
+function createGenesisBlock() {
+    console.log('⛏️  Creating genesis block...');
+
+    const genesisTimestamp = Date.now();
+    const genesisTransactions = [];
+
+    // Initial token distribution
+    const initialSupply = {
+        'treasury': 100000000,      // 100M ZWO for treasury
+        'team': 20000000,            // 20M ZWO for team
+        'validators': 10000000,      // 10M ZWO for validators
+        'community_rewards': 30000000, // 30M ZWO for rewards
+        'liquidity_pool': 40000000   // 40M ZWO for liquidity
+    };
+
+    // Create genesis transactions
+    Object.entries(initialSupply).forEach(([address, amount], index) => {
+        const tx = {
+            id: `genesis-tx-${index}`,
+            type: 'genesis_allocation',
+            fromAddress: 'genesis',
+            toAddress: address,
+            amount: amount,
+            fee: 0,
+            timestamp: genesisTimestamp,
+            data: {
+                allocation_type: address,
+                total_supply: 200000000 // 200M total
+            }
+        };
+
+        genesisTransactions.push(tx);
+        storeTransaction(tx);
+    });
+
+    // Create genesis block
+    const genesisBlock = {
+        hash: crypto.createHash('sha256')
+            .update('ziwio-genesis-block' + genesisTimestamp)
+            .digest('hex'),
+        header: {
+            height: 0,
+            index: 0,
+            timestamp: genesisTimestamp / 1000,
+            previousHash: '0000000000000000000000000000000000000000000000000000000000000000',
+            merkleRoot: crypto.createHash('sha256')
+                .update(JSON.stringify(genesisTransactions))
+                .digest('hex')
+        },
+        transactions: genesisTransactions,
+        previousHash: '0000000000000000000000000000000000000000000000000000000000000000'
+    };
+
+    blockchain.blocks.set(genesisBlock.hash, genesisBlock);
+    blockchain.height = 0;
+    blockchain.tips.add(genesisBlock.hash);
+    blockchain.genesisHash = genesisBlock.hash;
+
+    console.log('✅ Genesis block created:');
+    console.log(`   - Hash: ${genesisBlock.hash.substring(0, 16)}...`);
+    console.log(`   - Transactions: ${genesisTransactions.length}`);
+    console.log(`   - Total Supply: 200,000,000 ZWO`);
+
+    // Save immediately
+    saveBlockchain();
+}
+
+// Auto-save blockchain periodically
+setInterval(() => {
+    if (blockchain.blocks.size > 0) {
+        saveBlockchain();
+    }
+}, SAVE_INTERVAL);
+
 // MARK: - HTTP Endpoints
 
 app.get('/health', (req, res) => {
@@ -470,6 +628,9 @@ setInterval(() => {
 process.on('SIGTERM', () => {
     console.log('🛑 SIGTERM received, closing server...');
 
+    // Save blockchain before shutting down
+    saveBlockchain();
+
     wss.clients.forEach((ws) => {
         ws.close();
     });
@@ -483,5 +644,9 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
     console.log('\n🛑 SIGINT received, closing server...');
+
+    // Save blockchain before shutting down
+    saveBlockchain();
+
     process.exit(0);
 });
