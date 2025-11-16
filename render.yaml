@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ziwio-blockchain-node
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromGroup: PORT
+      - key: WS_PORT
+        value: 8334
+      - key: NODE_REGION
+        value: us-west-2

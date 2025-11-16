@@ -1,0 +1,30 @@
+{
+  "name": "ziwio-blockchain-node",
+  "version": "1.0.0",
+  "description": "Ziwio blockchain seed node for peer discovery and block relay",
+  "main": "blockchain-node.js",
+  "scripts": {
+    "start": "node blockchain-node.js",
+    "dev": "nodemon blockchain-node.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "blockchain",
+    "seed-node",
+    "p2p",
+    "cryptocurrency"
+  ],
+  "author": "Ziwio",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
